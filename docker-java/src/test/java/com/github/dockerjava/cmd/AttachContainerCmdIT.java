@@ -169,43 +169,92 @@ public class AttachContainerCmdIT extends CmdIT {
     }
 
     @Test
-    public void attachContainerStdinUnsupported() throws Exception {
+    public void bashStdin() throws Exception {
 
         DockerClient dockerClient = dockerRule.getClient();
-        Assume.assumeFalse("does not support stdin attach", getFactoryType().supportsStdinAttach());
-        expectedException.expect(UnsupportedOperationException.class);
+
 
         String snippet = "hello world";
 
-        CreateContainerResponse container = dockerClient.createContainerCmd(DEFAULT_IMAGE)
-                .withCmd("echo", snippet)
-                .withTty(false)
-                .exec();
+        CreateContainerResponse container = dockerClient.createContainerCmd("bash:4")
+            .withCmd("cat")
+            .withTty(false)
+            .withStdinOpen(true)
+            .exec();
 
         LOG.info("Created container: {}", container.toString());
         assertThat(container.getId(), not(is(emptyString())));
 
         dockerClient.startContainerCmd(container.getId()).exec();
-
+        final String[] result = {new String()};
         AttachContainerTestCallback callback = new AttachContainerTestCallback() {
             @Override
             public void onNext(Frame frame) {
-                assertThat(frame.getStreamType(), equalTo(StreamType.STDOUT));
+                LOG.info("Got frame: {}", frame);
+                if (frame.getStreamType() == StreamType.STDOUT){
+                    result[0] = result[0] + new String(frame.getPayload());
+                }
                 super.onNext(frame);
             };
         };
 
-        InputStream stdin = new ByteArrayInputStream("".getBytes());
-
+        InputStream stdin = new ByteArrayInputStream(snippet.getBytes());
+        callback.awaitStarted(5, SECONDS);
         dockerClient.attachContainerCmd(container.getId())
                 .withStdErr(true)
                 .withStdOut(true)
                 .withFollowStream(true)
-                .withLogs(true)
                 .withStdIn(stdin)
                 .exec(callback)
-                .awaitCompletion(30, TimeUnit.SECONDS);
+                .awaitCompletion(5, SECONDS);
         callback.close();
+        assertThat(result[0], equalTo(snippet));
+    }
+
+    @Test
+    public void pythonStdin() throws Exception {
+
+        DockerClient dockerClient = dockerRule.getClient();
+
+
+        String snippet = "hello world";
+        File baseDir = new File(Thread.currentThread().getContextClassLoader()
+            .getResource("dockerfile_python").getFile());
+
+        String imageId = dockerRule.buildImage(baseDir);
+
+        CreateContainerResponse container = dockerClient.createContainerCmd(imageId)
+            .withTty(false)
+            .withStdinOpen(true)
+            .exec();
+
+        LOG.info("Created container: {}", container.toString());
+        assertThat(container.getId(), not(is(emptyString())));
+
+        dockerClient.startContainerCmd(container.getId()).exec();
+        final String[] result = {new String()};
+        AttachContainerTestCallback callback = new AttachContainerTestCallback() {
+            @Override
+            public void onNext(Frame frame) {
+                LOG.info("Got frame: {}", frame);
+                if (frame.getStreamType() == StreamType.STDOUT){
+                    result[0] = result[0] + new String(frame.getPayload());
+                }
+                super.onNext(frame);
+            };
+        };
+
+        InputStream stdin = new ByteArrayInputStream(snippet.getBytes());
+        callback.awaitStarted(5, SECONDS);
+        dockerClient.attachContainerCmd(container.getId())
+            .withStdErr(true)
+            .withStdOut(true)
+            .withFollowStream(true)
+            .withStdIn(stdin)
+            .exec(callback)
+            .awaitCompletion(5, SECONDS);
+        callback.close();
+        assertThat(result[0], equalTo(snippet));
     }
 
     /**
